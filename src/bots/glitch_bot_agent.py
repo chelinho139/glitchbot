@@ -133,7 +133,7 @@ def add_to_priority_queue(mention_id, author, content, quality_score, is_priorit
         print(f"[add_to_priority_queue] Error: {e}")
 
 def reply_to_mention(mention_id: str, author: str, content: str, **kwargs) -> Tuple[FunctionResultStatus, str, dict]:
-    """Reply to a mention with context, priority handling, and smart following. Only use LLM for the reply. Never include internal logic in the public reply. Skip if already responded."""
+    """Reply to a mention with context, priority handling, and smart following. Store the original post if the mention is a reply, and only consider posting about it if it passes the quality threshold."""
     try:
         # Check if already responded
         if db.get_mention_response(mention_id):
@@ -141,19 +141,56 @@ def reply_to_mention(mention_id: str, author: str, content: str, **kwargs) -> Tu
             return FunctionResultStatus.FAILED, "Already responded to this mention", {"skipped": True}
         client = get_twitter_client()
         is_lemoncheli = YOUR_TWITTER_HANDLE.lower() in author.lower()
-        # Get the original tweet to find the author of the content being discussed
+        original_post = None
+        original_post_score = None
+        original_post_id = None
+        # Try to fetch the original post if this mention is a reply
         try:
-            mention_tweet = client.get_tweet(id=mention_id, expansions=["author_id"], user_fields=["public_metrics"])
-            original_author = mention_tweet.get("includes", {}).get("users", [{}])[0].get("username", author)
-        except Exception:
-            original_author = author
+            mention_tweet = client.get_tweet(id=mention_id, expansions=["author_id", "referenced_tweets.id"], tweet_fields=["author_id", "public_metrics", "referenced_tweets"])
+            referenced = mention_tweet.get("data", {}).get("referenced_tweets", [])
+            if referenced:
+                # Get the original post id (the tweet being replied to)
+                for ref in referenced:
+                    if ref.get("type") == "replied_to":
+                        original_post_id = ref.get("id")
+                        break
+            if original_post_id:
+                # Fetch the original post
+                orig_tweet = client.get_tweet(id=original_post_id, expansions=["author_id"], tweet_fields=["author_id", "public_metrics"])
+                orig_data = orig_tweet.get("data", {})
+                orig_author_id = orig_data.get("author_id")
+                orig_content = orig_data.get("text", "")
+                orig_metrics = orig_data.get("public_metrics", {})
+                # Store the original post in monitored_content if not already present
+                db.store_monitored_content(
+                    tweet_id=original_post_id,
+                    content=orig_content,
+                    topic="user_mention",
+                    author_id=orig_author_id,
+                    engagement_metrics=orig_metrics
+                )
+                # Assess quality/score
+                _, _, original_post_score = assess_content_quality(orig_content, {"public_metrics": orig_metrics})
+                original_post = {
+                    "tweet_id": original_post_id,
+                    "content": orig_content,
+                    "author_id": orig_author_id,
+                    "score": original_post_score
+                }
+        except Exception as e:
+            print(f"[reply_to_mention] Could not fetch/store original post: {e}")
         topic = "AI"  # Or use NLP to extract topic
         knowledge = db.get_knowledge_for_topic(topic)
         from src.bots.llm_utils import generate_reply_to_mention
+        # Compose reply: thank the tagger, quick comment on the original post if available
+        if original_post:
+            reply_context = f"Thanks @{author} for the tag! Interesting post by @{original_post['author_id']}: '{original_post['content'][:100]}...'"
+        else:
+            reply_context = f"Thanks @{author} for the tag!"
         llm_reply = generate_reply_to_mention(
             topic,
             knowledge,
-            content,
+            content + "\n" + (original_post["content"] if original_post else ""),
             mention_author=author,
             mention_url=f"https://x.com/i/web/status/{mention_id}"
         )
@@ -174,13 +211,31 @@ def reply_to_mention(mention_id: str, author: str, content: str, **kwargs) -> Tu
             mention_content=content,
             response_content=llm_reply,
             response_tweet_id=reply["data"]["id"],
-            context_used=f"{topic} knowledge, priority={is_lemoncheli}"
+            context_used=f"{topic} knowledge, priority={is_lemoncheli}, original_post_id={original_post_id}"
         )
+        # Optionally, consider posting about the original post if it passes the score threshold
+        POST_SCORE_THRESHOLD = 15
+        if original_post and original_post_score is not None and original_post_score >= POST_SCORE_THRESHOLD:
+            # Prepare a post for the bot's own timeline (not every mention triggers this)
+            from src.bots.llm_utils import generate_quote_tweet_comment
+            llm_summary = generate_quote_tweet_comment(
+                topic,
+                knowledge,
+                original_post["content"],
+                tweet_url=f"https://x.com/i/web/status/{original_post_id}"
+            )
+            if llm_summary and len(llm_summary) > 0:
+                tweet_text = f"{llm_summary}\n\nhttps://x.com/i/web/status/{original_post_id}"
+                if len(tweet_text) > 280:
+                    tweet_text = f"{llm_summary[:250]}...\nhttps://x.com/i/web/status/{original_post_id}"
+                db.store_generated_thread(thread_content=tweet_text, topic=topic)
+                print(f"[reply_to_mention] Prepared timeline post for high-scoring original post: {tweet_text}")
         result_info = {
             "response_posted": True,
             "reply_url": reply_url,
             "is_priority": is_lemoncheli,
-            "topic": topic
+            "topic": topic,
+            "original_post": original_post
         }
         return FunctionResultStatus.DONE, f"💬 Responded to mention: {reply_url}", result_info
     except Exception as e:
@@ -256,7 +311,7 @@ def post_insight_from_timeline(topic: str, **kwargs) -> Tuple[FunctionResultStat
     except Exception as e:
         return FunctionResultStatus.FAILED, f"Tweet creation failed: {str(e)}", {}
 
-def select_interesting_content_from_db(limit=10):
+def select_interesting_content_from_db(limit=10, score_threshold=5):
     """Fetch and score recent monitored_content for interestingness."""
     from src.bots.config import QUALITY_INDICATORS
     recent = db.get_recent_monitored_content(limit=limit)
@@ -282,7 +337,8 @@ def select_interesting_content_from_db(limit=10):
         score += max(0, limit - recent.index(item))
         scored.append((score, item))
     scored.sort(reverse=True, key=lambda x: x[0])
-    return scored[0][1] if scored and scored[0][0] > 0 else None
+    # Only return if the score is above the threshold
+    return scored[0][1] if scored and scored[0][0] >= score_threshold else None
 
 def enhanced_monitor_and_respond(topics: str = None, **kwargs) -> Tuple[FunctionResultStatus, str, dict]:
     """Enhanced monitoring with mention responses and timeline checking"""
@@ -331,6 +387,8 @@ def enhanced_monitor_and_respond(topics: str = None, **kwargs) -> Tuple[Function
                         author_id=tweet.get("author_id"),
                         engagement_metrics=tweet.get("public_metrics", {})
                     )
+            # Log the entire response for debugging
+            print(f"[DEBUG] Full timeline response: {timeline}")
         except Exception as e:
             print(f"Home timeline monitoring failed: {e}")
             for account in ACCOUNTS_TO_MONITOR[:2]:

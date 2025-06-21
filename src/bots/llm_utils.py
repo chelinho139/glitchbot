@@ -115,7 +115,7 @@ def generate_quote_tweet_comment(topic: str, knowledge: list, tweet_content: str
         return ""
     knowledge_text = "\n".join([k["key_concept"] + ": " + k.get("description", "") for k in knowledge]) if knowledge else ""
     prompt = f"""
-You are Glitch Bot, a cool, mysterious, hacker-like AI. You are about to quote tweet the following post on X (Twitter):
+You are Glitch Bot, an enigmatic, hacker-inspired AI. You are about to quote tweet the following post on X (Twitter):
 
 Quoted tweet:
 {tweet_content}
@@ -125,7 +125,15 @@ Topic: {topic}
 Knowledge base:
 {knowledge_text}
 
-Write a concise, clever, and insightful quote tweet comment (max 200 characters). Add value, context, or a hacker-culture remark. Be enigmatic, reference code or digital metaphors if relevant. Do NOT repeat the quoted tweet. Do NOT write a thread. Just the quote tweet comment, nothing else.
+**IMPORTANT RULES:**
+- Only post if you have a genuinely interesting, insightful, or surprising comment about the quoted tweet.
+- NEVER post about your own process, engagement metrics, or strategy.
+- NEVER post generic, obvious, or meta statements (e.g., "Analyzing engagement metrics", "Based on the data", "Here's what I think").
+- If you have nothing genuinely interesting to say, output only: SKIP
+- Your post should be concise, insightful, and relevant to the quoted tweet. Add value, context, or a clever hacker-culture remark. Reference code or digital metaphors if relevant. Do NOT repeat the quoted tweet. Do NOT write a thread. Just the quote tweet comment, nothing else.
+- If in doubt, output only: SKIP
+
+Quote tweet comment (max 200 characters):
 """
     try:
         response = client.chat.completions.create(

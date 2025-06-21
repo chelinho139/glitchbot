@@ -193,3 +193,4 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 .DS_Store
+enhanced_glitch_bot_v2.db

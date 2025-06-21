@@ -1,0 +1,12 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# GAME Python SDK Documentation
+
+For detailed information on the GAME Python SDK, please refer to the official documentation:
+
+[GAME Python SDK Documentation](mdc:https:/github.com/game-by-virtuals/game-python)
+
+This documentation provides insights into configuring and managing agents, including setting up delays and managing worker tasks.

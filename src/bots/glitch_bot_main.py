@@ -69,7 +69,8 @@ def main():
     print("🛑 Press Ctrl+C to stop")
 
     # Configurable delay (default 900s = 15 minutes)
-    DELAY_BETWEEN_STEPS = int(os.environ.get("GLITCH_BOT_STEP_DELAY", POSTING_CONFIG.get("delay_between_steps", 900)))
+    DELAY_BETWEEN_STEPS = int(os.environ.get("GLITCH_BOT_STEP_DELAY", POSTING_CONFIG.get("delay_between_steps", 3600)))  # 1 hour for timeline
+    MENTION_CHECK_INTERVAL = 300  # 5 minutes for mentions
     MAX_BACKOFF = 1800  # 30 minutes
     backoff = DELAY_BETWEEN_STEPS
 
@@ -80,8 +81,8 @@ def main():
             while True:
                 try:
                     agent.run()
-                    time.sleep(DELAY_BETWEEN_STEPS)
-                    backoff = DELAY_BETWEEN_STEPS
+                    time.sleep(MENTION_CHECK_INTERVAL)
+                    backoff = MENTION_CHECK_INTERVAL
                 except Exception as e:
                     err_str = str(e)
                     if "429" in err_str or "Too Many Requests" in err_str:
@@ -96,13 +97,13 @@ def main():
                         backoff = min(backoff * 2, MAX_BACKOFF)
                     else:
                         print("[GlitchBot] ⚠️ Error:", e)
-                        time.sleep(DELAY_BETWEEN_STEPS)
+                        time.sleep(MENTION_CHECK_INTERVAL)
         except KeyboardInterrupt:
             print("[GlitchBot] Stopped by user.")
             break
         except Exception as e:
             print("[GlitchBot] ⚠️ Fatal error:", e)
-            time.sleep(DELAY_BETWEEN_STEPS)
+            time.sleep(MENTION_CHECK_INTERVAL)
     # To adjust the delay, set the GLITCH_BOT_STEP_DELAY environment variable or change POSTING_CONFIG['delay_between_steps']
 
 if __name__ == "__main__":
