@@ -1,0 +1,4 @@
+game-sdk
+twitter-plugin-gamesdk
+openai
+python-dotenv
